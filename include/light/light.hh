@@ -408,6 +408,8 @@ public:
     setting_bool lightgrid;
     setting_vec3 lightgrid_dist;
     setting_enum<lightgrid_format_t> lightgrid_format;
+    setting_bool lshgrid;
+    setting_vec3 lshgrid_dist;
 
     setting_func dirtdebug;
     setting_func bouncedebug;

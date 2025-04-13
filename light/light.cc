@@ -388,6 +388,10 @@ light_settings::light_settings()
           "distance between lightgrid sample points, in world units. controls lightgrid size."},
       lightgrid_format{this, "lightgrid_format", lightgrid_format_t::OCTREE, {{"octree", lightgrid_format_t::OCTREE}},
           &experimental_group, "lightgrid BSPX lump to use"},
+      lshgrid{this, "lshgrid", false, &experimental_group,
+          "generates a grid of SH light probes and writes it to a bspx lump (LSH_GRID)"},
+      lshgrid_dist{this, "lshgrid_dist", 32.f, 32.f, 32.f, &experimental_group,
+          "distance between SH light probes, in world units. (controls size of SH light grid)"},
 
       dirtdebug{this, {"dirtdebug", "debugdirt"},
           [&](const std::string &, parser_base_t &, source) {
@@ -1416,6 +1420,7 @@ int light_main(int argc, const char **argv)
         LightWorld(&bspdata, source, light_options.lightmap_scale.is_changed());
 
         LightGrid(&bspdata);
+        SHGrid(&bspdata);
 
         ClearLightmapSurfaces();
 

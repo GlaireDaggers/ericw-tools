@@ -74,6 +74,18 @@ struct lightgrid_raw_data
     qvec3f grid_index_to_world(const qvec3i &index) const { return grid_mins + (index * grid_dist); }
 };
 
+struct lshgrid_raw_data
+{
+    qvec3f grid_dist;
+    qvec3f grid_mins;
+    qvec3i grid_size;
+    std::vector<sh_sample_t> grid_result;
+
+    int get_grid_index(int x, int y, int z) const { return (grid_size[0] * grid_size[1] * z) + (grid_size[0] * y) + x; }
+
+    qvec3f grid_index_to_world(const qvec3i &index) const { return grid_mins + (index * grid_dist); }
+};
+
 static std::vector<uint8_t> MakeOctreeLump(const mbsp_t &bsp, const lightgrid_raw_data &data)
 {
     /**
@@ -364,6 +376,37 @@ static std::vector<uint8_t> MakeOctreeLump(const mbsp_t &bsp, const lightgrid_ra
     return vec;
 }
 
+static std::vector<uint8_t> MakeLSHGridLump(const mbsp_t &bsp, const lshgrid_raw_data &data)
+{
+    // write out the binary data
+    const qvec3f grid_dist = qvec3f{data.grid_dist};
+
+    std::ostringstream str(std::ios_base::out | std::ios_base::binary);
+    str << endianness<std::endian::little>;
+    str <= grid_dist;
+    str <= data.grid_size;
+    str <= data.grid_mins;
+
+    for (int i = 0; i < data.grid_result.size(); i++) {
+        str <= data.grid_result[i].l0[0];
+        str <= data.grid_result[i].l0[1];
+        str <= data.grid_result[i].l0[2];
+        str <= data.grid_result[i].l1[0][0];
+        str <= data.grid_result[i].l1[0][1];
+        str <= data.grid_result[i].l1[0][2];
+        str <= data.grid_result[i].l1[1][0];
+        str <= data.grid_result[i].l1[1][1];
+        str <= data.grid_result[i].l1[1][2];
+        str <= data.grid_result[i].l1[2][0];
+        str <= data.grid_result[i].l1[2][1];
+        str <= data.grid_result[i].l1[2][2];
+    }
+
+    auto vec = StringToVector(str.str());
+    logging::print("     {:8} bytes LSH_GRID\n", vec.size());
+    return vec;
+}
+
 std::tuple<lightgrid_samples_t, bool> FixPointAndCalcLightgrid(const mbsp_t *bsp, qvec3f world_point)
 {
     bool occluded = Light_PointInWorld(bsp, world_point);
@@ -382,6 +425,26 @@ std::tuple<lightgrid_samples_t, bool> FixPointAndCalcLightgrid(const mbsp_t *bsp
         samples = CalcLightgridAtPoint(bsp, world_point);
 
     return {samples, occluded};
+}
+
+sh_sample_t FixPointAndCalcSH(const mbsp_t *bsp, qvec3f world_point)
+{
+    bool occluded = Light_PointInWorld(bsp, world_point);
+    if (occluded) {
+        // search for a nearby point
+        auto [fixed_pos, success] = FixLightOnFace(bsp, world_point, false, 2.0f);
+        if (success) {
+            occluded = false;
+            world_point = fixed_pos;
+        }
+    }
+
+    sh_sample_t sample { 0 };
+
+    if (!occluded)
+        sample = CalcSHAtPoint(bsp, world_point);
+
+    return sample;
 }
 
 void LightGrid(bspdata_t *bspdata)
@@ -445,4 +508,48 @@ void LightGrid(bspdata_t *bspdata)
     if (light_options.lightgrid_format.value() == lightgrid_format_t::OCTREE) {
         bspdata->bspx.transfer("LIGHTGRID_OCTREE", MakeOctreeLump(bsp, data));
     }
+}
+
+void SHGrid(bspdata_t *bspdata)
+{
+    if (!light_options.lshgrid.value())
+        return;
+
+    logging::funcheader();
+
+    auto &bsp = std::get<mbsp_t>(bspdata->bsp);
+
+    lshgrid_raw_data data;
+    data.grid_dist = light_options.lshgrid_dist.value();
+
+    auto grid_bounds = LightGridBounds(bsp);
+
+    const qvec3f grid_maxs = grid_bounds.maxs();
+    data.grid_mins = grid_bounds.mins();
+    const qvec3f world_size = grid_maxs - data.grid_mins;
+
+    // number of grid points on each axis
+    data.grid_size = {ceil(world_size[0] / data.grid_dist[0]), ceil(world_size[1] / data.grid_dist[1]),
+        ceil(world_size[2] / data.grid_dist[2])};
+
+    data.grid_result.resize(data.grid_size[0] * data.grid_size[1] * data.grid_size[2]);
+
+    logging::parallel_for(0, data.grid_size[0] * data.grid_size[1] * data.grid_size[2], [&](int sample_index) {
+        const int z = (sample_index / (data.grid_size[0] * data.grid_size[1]));
+        const int y = (sample_index / data.grid_size[0]) % data.grid_size[1];
+        const int x = sample_index % data.grid_size[0];
+
+        qvec3f world_point = data.grid_mins + (qvec3f{x, y, z} * data.grid_dist);
+
+        sh_sample_t sample = FixPointAndCalcSH(&bsp, world_point);
+
+        data.grid_result[sample_index] = sample;
+    });
+
+    logging::print("     {} lshgrid_dist\n", data.grid_dist);
+    logging::print("     {} grid_size\n", data.grid_size);
+    logging::print("     {} grid_mins\n", data.grid_mins);
+    logging::print("     {} grid_maxs\n", grid_maxs);
+
+    bspdata->bspx.transfer("LSH_GRID", MakeLSHGridLump(bsp, data));
 }

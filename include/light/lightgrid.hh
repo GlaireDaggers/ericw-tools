@@ -25,3 +25,4 @@ struct bspdata_t;
 
 std::tuple<lightgrid_samples_t, bool> FixPointAndCalcLightgrid(const mbsp_t *bsp, qvec3f world_point);
 void LightGrid(bspdata_t *bspdata);
+void SHGrid(bspdata_t *bspdata);

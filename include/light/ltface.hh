@@ -72,6 +72,12 @@ struct lightgrid_sample_t
     bool operator!=(const lightgrid_sample_t &other) const; // gcc9 workaround
 };
 
+struct sh_sample_t
+{
+    float l0[3];
+    qvec3f l1[3];
+};
+
 struct lightgrid_samples_t
 {
     std::array<lightgrid_sample_t, 4> samples_by_style;
@@ -86,4 +92,5 @@ struct lightgrid_samples_t
 };
 
 lightgrid_samples_t CalcLightgridAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
+sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
 void ResetLtFace();
