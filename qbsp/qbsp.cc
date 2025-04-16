@@ -1684,9 +1684,22 @@ static void LoadSecondaryTextures()
 UnpackStaticProps
 =================
 */
+static void AddPropToLeaves(const aabb3f &prop_bounds, uint32_t prop_index, std::map<int, std::vector<uint32_t>> &leaf_props)
+{
+    for (int i = 0; i < map.bsp.dleafs.size(); i++)
+    {
+        aabb3f leaf_bounds = aabb3f(map.bsp.dleafs[i].mins, map.bsp.dleafs[i].maxs);
+
+        if (leaf_bounds.intersectWith(prop_bounds))
+        {
+            leaf_props[i].push_back(prop_index);
+        }
+    }
+}
+
 static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, const tinygltf::Node& node, const tinygltf::Mesh& mesh, const std::vector<uint32_t> &materials,
     bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
-    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles, std::map<int, std::vector<uint32_t>> &leaf_props)
 {
     for (const auto &prim : mesh.primitives)
     {
@@ -1714,6 +1727,11 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
         const auto &position_buffer = model.buffers[position_buffer_view.buffer];
         const auto position_data_address = position_buffer.data.data() + position_buffer_view.byteOffset + position_accessor.byteOffset;
         const auto position_stride = position_accessor.ByteStride(position_buffer_view);
+
+        if (index_accessor.count == 0 || position_accessor.count == 0)
+        {
+            continue;
+        }
 
         uint32_t first_index = sprop_indices.indices.size();
         uint32_t first_vertex = sprop_vertices.vertices.size();
@@ -1993,10 +2011,16 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
             }
         }
 
+        qvec3f min, max;
+        min = max = vertices[0].position;
+
         for (int i = 0; i < position_accessor.count; i++)
         {
             vertices[i].position = trs * qvec4f(vertices[i].position, 1.0f);
             vertices[i].normal = trs * qvec4f(vertices[i].normal, 0.0f);
+
+            min = qv::min(min, vertices[i].position);
+            max = qv::max(max, vertices[i].position);
 
             float tan_w = vertices[i].tangent[3];
             qvec3f tan = vertices[i].tangent;
@@ -2006,6 +2030,8 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
         }
 
         sprop_vertices.vertices.insert(sprop_vertices.vertices.end(), vertices.begin(), vertices.end());
+
+        uint32_t prop_index = sprop.entries.size();
         auto &sprop_info = sprop.entries.emplace_back();
 
         sprop_info.material = materials[prim.material];
@@ -2024,13 +2050,17 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
         sprop_info.first_vertex = first_vertex;
         sprop_info.num_vertices = position_accessor.count;
 
+        // add prop to any leaves it touches
+        aabb3f prop_bounds = aabb3f(min, max);
+        AddPropToLeaves(prop_bounds, prop_index, leaf_props);
+
         num_static_props.count += 1;
     }
 }
 
 static void UnpackPropNode(const tinygltf::Model &model, const qmat4x4f trs, int node_id, const std::vector<uint32_t> &materials,
     bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
-    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles, std::map<int, std::vector<uint32_t>> &leaf_props)
 {
     const auto &node = model.nodes[node_id];
 
@@ -2038,24 +2068,24 @@ static void UnpackPropNode(const tinygltf::Model &model, const qmat4x4f trs, int
     {
         // unpack mesh
         const auto &mesh = model.meshes[node.mesh];
-        UnpackPropMesh(model, trs, node, mesh, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+        UnpackPropMesh(model, trs, node, mesh, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles, leaf_props);
     }
 
     for (auto child : node.children)
     {
-        UnpackPropNode(model, trs, child, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+        UnpackPropNode(model, trs, child, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles, leaf_props);
     }
 }
 
 static void UnpackPropHierarchy(const tinygltf::Model &model, const qmat4x4f trs, const std::vector<uint32_t> &materials,
     bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
-    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles, std::map<int, std::vector<uint32_t>> &leaf_props)
 {
     const auto &default_scene = model.scenes[model.defaultScene];
 
     for (auto node_id : default_scene.nodes)
     {
-        UnpackPropNode(model, trs, node_id, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+        UnpackPropNode(model, trs, node_id, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles, leaf_props);
     }
 }
 
@@ -2085,6 +2115,9 @@ static void UnpackStaticProps()
 
     // cache of model material IDs
     std::map<std::string, uint32_t> matcache;
+
+    // map of leaf index -> array of props
+    std::map<int, std::vector<uint32_t>> leaf_props;
 
     // iterate prop_static entities in map
     for (auto &entity : map.entities) {
@@ -2212,11 +2245,31 @@ static void UnpackStaticProps()
             }
 
             // walk node hierarchy to find mesh parts
-            UnpackPropHierarchy(model, prop_trs, prop_materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_static_prop_tris);
+            UnpackPropHierarchy(model, prop_trs, prop_materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_static_prop_tris, leaf_props);
+        }
+    }
+
+    // gather leaf prop lists
+    for (int i = 0; i < map.bsp.dleafs.size(); i++)
+    {
+        auto &entry = leaf_sprop.entries.emplace_back();
+        entry.first_prop = leaf_sprop.prop_indices.size();
+        entry.num_props = 0;
+
+        if (leaf_props.contains(i))
+        {
+            auto &props = leaf_props[i];
+            entry.num_props = props.size();
+            leaf_sprop.prop_indices.insert(leaf_sprop.prop_indices.end(), props.begin(), props.end());
         }
     }
     
     // serialize lumps
+    std::ostringstream str_leaf_sprop(std::ios_base::out | std::ios_base::binary);
+    str_leaf_sprop << endianness<std::endian::little>;
+    str_leaf_sprop <= leaf_sprop;
+    map.exported_bspx_leaf_static_prop = StringToVector(str_leaf_sprop.str());
+
     std::ostringstream str_sprop(std::ios_base::out | std::ios_base::binary);
     str_sprop << endianness<std::endian::little>;
     str_sprop <= sprop;
