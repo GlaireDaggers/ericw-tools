@@ -2017,7 +2017,9 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
         for (int i = 0; i < position_accessor.count; i++)
         {
             vertices[i].position = trs * qvec4f(vertices[i].position, 1.0f);
-            vertices[i].normal = trs * qvec4f(vertices[i].normal, 0.0f);
+
+            qvec3f nrm = trs * qvec4f(vertices[i].normal, 0.0f);
+            vertices[i].normal = qv::normalize(nrm);
 
             min = qv::min(min, vertices[i].position);
             max = qv::max(max, vertices[i].position);
@@ -2026,7 +2028,7 @@ static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, con
             qvec3f tan = vertices[i].tangent;
             tan = trs * qvec4f(tan, 0.0f);
 
-            vertices[i].tangent = qvec4f(tan, tan_w);
+            vertices[i].tangent = qvec4f(qv::normalize(tan), tan_w);
         }
 
         sprop_vertices.vertices.insert(sprop_vertices.vertices.end(), vertices.begin(), vertices.end());

@@ -21,6 +21,7 @@
         "ios": "cpp",
         "map": "cpp",
         "set": "cpp",
-        "array": "cpp"
+        "array": "cpp",
+        "iosfwd": "cpp"
     }
 }

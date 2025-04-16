@@ -2280,9 +2280,89 @@ SH_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_oc
                         continue;
 
                     qvec3f indirect = rs.getPushedRayColor(j);
-                    qvec3f rayDir = rs.getPushedRayDir(j);
+                    qvec3f rayDir = rs.getPushedRayDir(j) * -1.0f;
 
                     SumSH(qv::normalize(rayDir), indirect, result);
+                }
+            }
+        }
+    }
+}
+
+static void // mxd
+PointSurf_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_occlusion_t &rs, bool bounce,
+    float standard_scale, float sky_scale, float hotspot_clamp, const qvec3f &surfpoint, const qvec3f &surfnrm, qvec3f &result)
+{
+    const settings::worldspawn_keys &cfg = light_options;
+    const float surflight_gate = light_options.emissivequality.value() == emissivequality_t::HIGH ? 0 : 0.01f;
+
+    for (const auto &surf : EmissiveLightSurfaces()) {
+        const surfacelight_t &vpl = *surf->vpl;
+
+        if (SurfaceLight_VisCull(bsp, pvs, surf)) {
+            continue;
+        }
+
+        for (int c = 0; c < vpl.points.size(); c++) {
+            // 1 ray
+            for (auto &vpl_settings : vpl.styles) {
+                if (vpl_settings.bounce_level.has_value() != bounce)
+                    continue;
+
+                qvec3f pos = vpl.points[c];
+                qvec3f dir = surfpoint - pos;
+                float dist = qv::length(dir);
+
+                if (dist == 0.0f)
+                    dir = {0, 0, 1};
+                else
+                    dir /= dist;
+
+                qvec3f indirect{};
+
+                rs.clearPushedRays();
+
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int sign = -1; sign <= +1; sign += 2) {
+
+                        qvec3f cube_color;
+
+                        qvec3f cube_normal{};
+                        cube_normal[axis] = sign;
+
+                        cube_color = GetSurfaceLighting(cfg, vpl, vpl_settings, dir, dist, cube_normal, true,
+                            standard_scale, sky_scale, hotspot_clamp);
+
+#ifdef LIGHTPOINT_TAKE_MAX
+                        if (qv::length2(cube_color) > qv::length2(indirect)) {
+                            indirect = cube_color;
+                        }
+#else
+                        indirect += cube_color / 6.0f;
+#endif
+                    }
+                }
+
+                if (!qv::gate(indirect, surflight_gate)) { // Each point contributes very little to the final result
+                    rs.pushRay(0, pos, dir, dist, &indirect);
+                }
+
+                if (!rs.numPushedRays())
+                    continue;
+
+                rs.tracePushedRaysOcclusion(nullptr, CHANNEL_MASK_DEFAULT);
+
+                const int numrays = rs.numPushedRays();
+                for (int j = 0; j < numrays; j++) {
+                    if (rs.getPushedRayOccluded(j))
+                        continue;
+
+                    qvec3f indirect = rs.getPushedRayColor(j);
+                    qvec3f rayDir = qv::normalize(rs.getPushedRayDir(j)) * -1.0f;
+
+                    float atten = qv::dot(rayDir, surfnrm);
+
+                    result += indirect * fmaxf(atten, 0.0f);
                 }
             }
         }
@@ -3076,7 +3156,7 @@ sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
             lightgrid_samples_t sample;
             LightPoint_Entity(bsp, rs, entity.get(), world_point, sample);
 
-            qvec3f dir = qv::normalize(world_point - entity.get()->origin.value());
+            qvec3f dir = qv::normalize(world_point - entity.get()->origin.value()) * -1.0f;
             SumSH(dir, sample.samples_by_style[0].color, result);
         }
     }
@@ -3095,6 +3175,65 @@ sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
     {
         SH_SurfaceLight(
             bsp, pvs, rs, true, cfg.bouncescale.value() * 0.5, cfg.bouncescale.value(), 128.0f, world_point, result);
+    }
+
+    return result;
+}
+
+qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal)
+{
+    // TODO: use more than 1 ray for better performance
+    raystream_occlusion_t rs(1);
+    raystream_intersection_t rsi(1);
+
+    const auto *pvs = Mod_LeafPvs(bsp, BSP_FindLeafAtPoint(bsp, &bsp->dmodels[0], world_point));
+
+    auto &cfg = light_options;
+
+    qvec3f result{};
+
+    // from DirectLightFace
+
+    /*
+     * The lighting procedure is: cast all positive lights, fix
+     * minlight levels, then cast all negative lights. Finally, we
+     * clamp any values that may have gone negative.
+     */
+
+    /* positive lights */
+    for (const auto &entity : GetLights()) {
+        if (entity->getFormula() == LF_LOCALMIN)
+            continue;
+        if (entity->nostaticlight.value())
+            continue;
+        if (entity->light.value() > 0) {
+            lightgrid_samples_t sample;
+            LightPoint_Entity(bsp, rs, entity.get(), world_point, sample);
+
+            qvec3f dir = qv::normalize(world_point - entity.get()->origin.value()) * -1.0f;
+            float atten = qv::dot(dir, world_normal);
+
+            result += sample.samples_by_style[0].color * fmaxf(atten, 0.0f);
+        }
+    }
+
+    for (const sun_t &sun : GetSuns()) {
+        if (sun.sunlight > 0) {
+            lightgrid_samples_t sample;
+            LightPoint_Sky(bsp, rsi, &sun, world_point, sample);
+
+            qvec3f dir = qv::normalize(sun.sunvec);
+            float atten = qv::dot(dir, world_normal);
+
+            result += sample.samples_by_style[0].color * fmaxf(atten, 0.0f);
+        }
+    }
+
+    /* add bounce lighting */
+    // note: scale here is just to keep it close-ish to the old code
+    {
+        PointSurf_SurfaceLight(
+            bsp, pvs, rs, true, cfg.bouncescale.value() * 0.5f, cfg.bouncescale.value(), 128.0f, world_point, world_normal, result);
     }
 
     return result;

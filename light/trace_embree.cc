@@ -280,6 +280,91 @@ static void CreateGeometryFromWindings(
     rtcCommitGeometry(geom_1);
 }
 
+static void CreateGeometryFromStaticProps(const bspdata_t::bspxentries *bspx, RTCDevice g_device, RTCScene scene)
+{
+    if (!bspx->entries.contains("SPROP")) {
+        return;
+    }
+
+    auto &sprop_lump_data = bspx->entries.at("SPROP");
+    auto &sprop_indices_lump_data = bspx->entries.at("SPROP_INDICES");
+    auto &sprop_vertices_lump_data = bspx->entries.at("SPROP_VERTICES");
+    auto &sprop_materials_lump_data = bspx->entries.at("SPROP_MATERIALS");
+
+    auto sprop_lump = bspx_sprop();
+    auto sprop_indices_lump = bspx_sprop_indices();
+    auto sprop_vertices_lump = bspx_sprop_vertices();
+    auto sprop_materials_lump = bspx_sprop_materials();
+
+    imemstream str_sprop(sprop_lump_data.data(), sprop_lump_data.size());
+    str_sprop >> endianness<std::endian::little>;
+    str_sprop >= sprop_lump;
+
+    imemstream str_sprop_indices(sprop_indices_lump_data.data(), sprop_indices_lump_data.size());
+    str_sprop_indices >> endianness<std::endian::little>;
+    str_sprop_indices >= sprop_indices_lump;
+
+    imemstream str_sprop_vertices(sprop_vertices_lump_data.data(), sprop_vertices_lump_data.size());
+    str_sprop_vertices >> endianness<std::endian::little>;
+    str_sprop_vertices >= sprop_vertices_lump;
+
+    imemstream str_sprop_materials(sprop_materials_lump_data.data(), sprop_materials_lump_data.size());
+    str_sprop_materials >> endianness<std::endian::little>;
+    str_sprop_materials >= sprop_materials_lump;
+
+    struct Vertex
+    {
+        float point[4];
+    }; // 4th element is padding
+    struct Triangle
+    {
+        int v0, v1, v2;
+    };
+
+    // create geometry from each prop
+    for (const auto &prop : sprop_lump.entries) {
+        if (prop.mode == 1) {
+            logging::print("TODO: Static prop has triangle strip, skipping...");
+            continue;
+        }
+
+        RTCGeometry geom_0 = rtcNewGeometry(g_device, RTC_GEOMETRY_TYPE_TRIANGLE);
+        rtcSetGeometryMask(geom_0, 1);
+        rtcSetGeometryBuildQuality(geom_0, RTC_BUILD_QUALITY_MEDIUM);
+        rtcSetGeometryTimeStepCount(geom_0, 1);
+        rtcAttachGeometry(scene, geom_0);
+        rtcReleaseGeometry(geom_0);
+
+        Vertex *vertices = (Vertex *)rtcSetNewGeometryBuffer(
+            geom_0, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, 4 * sizeof(float), prop.num_vertices);
+        {
+            for (int i = 0; i < prop.num_vertices; i++)
+            {
+                auto vtx = sprop_vertices_lump.vertices[prop.first_vertex + i];
+                vertices[i].point[0] = vtx.position[0];
+                vertices[i].point[1] = vtx.position[1];
+                vertices[i].point[2] = vtx.position[2];
+                vertices[i].point[3] = 1.0f;
+            }
+        }
+
+        Triangle *triangles = (Triangle *)rtcSetNewGeometryBuffer(
+            geom_0, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(int), prop.num_indices / 3);
+        {
+            int tri_idx = 0;
+            for (int i = 0; i < prop.num_indices; i += 3)
+            {
+                triangles[tri_idx].v0 = sprop_indices_lump.indices[i];
+                triangles[tri_idx].v1 = sprop_indices_lump.indices[i + 1];
+                triangles[tri_idx].v2 = sprop_indices_lump.indices[i + 2];
+                tri_idx++;
+            }
+        }
+
+        rtcCommitGeometry(geom_0);
+    }
+}
+
 void ErrorCallback(void *userptr, const RTCError code, const char *str)
 {
     fmt::print("RTC Error {}: {}\n", static_cast<int>(code), str);
@@ -540,7 +625,7 @@ static void MakeFaces(
     Q_assert(planes.empty());
 }
 
-void Embree_TraceInit(const mbsp_t *bsp)
+void Embree_TraceInit(const mbsp_t *bsp, const bspdata_t::bspxentries *bspx)
 {
     bsp_static = bsp;
     Q_assert(device == nullptr);
@@ -682,6 +767,8 @@ void Embree_TraceInit(const mbsp_t *bsp)
     solidgeom = CreateGeometry(bsp, device, scene, solidfaces);
     filtergeom = CreateGeometry(bsp, device, scene, filterfaces);
     CreateGeometryFromWindings(device, scene, skipwindings);
+
+    CreateGeometryFromStaticProps(bspx, device, scene);
 
     rtcSetGeometryIntersectFilterFunction(rtcGetGeometry(scene, filtergeom.geomID), Embree_FilterFuncN);
     rtcSetGeometryOccludedFilterFunction(rtcGetGeometry(scene, filtergeom.geomID), Embree_FilterFuncN);

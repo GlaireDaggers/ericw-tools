@@ -1000,6 +1000,68 @@ static void LightWorld(bspdata_t *bspdata, const fs::path &source, bool forcedsc
     }
 }
 
+static float clampf(float a, float min, float max)
+{
+    if (a < min) return min;
+    if (a > max) return max;
+    return a;
+}
+
+static void LightProps(const mbsp_t *bsp, bspdata_t *bspdata)
+{
+    if (!bspdata->bspx.entries.contains("SPROP")) {
+        return;
+    }
+
+    logging::funcheader();
+
+    auto &sprop_lump_data = bspdata->bspx.entries.at("SPROP");
+    auto &sprop_indices_lump_data = bspdata->bspx.entries.at("SPROP_INDICES");
+    auto &sprop_vertices_lump_data = bspdata->bspx.entries.at("SPROP_VERTICES");
+    auto &sprop_materials_lump_data = bspdata->bspx.entries.at("SPROP_MATERIALS");
+
+    auto sprop_lump = bspx_sprop();
+    auto sprop_indices_lump = bspx_sprop_indices();
+    auto sprop_vertices_lump = bspx_sprop_vertices();
+    auto sprop_materials_lump = bspx_sprop_materials();
+
+    imemstream str_sprop(sprop_lump_data.data(), sprop_lump_data.size());
+    str_sprop >> endianness<std::endian::little>;
+    str_sprop >= sprop_lump;
+
+    imemstream str_sprop_indices(sprop_indices_lump_data.data(), sprop_indices_lump_data.size());
+    str_sprop_indices >> endianness<std::endian::little>;
+    str_sprop_indices >= sprop_indices_lump;
+
+    imemstream str_sprop_vertices(sprop_vertices_lump_data.data(), sprop_vertices_lump_data.size());
+    str_sprop_vertices >> endianness<std::endian::little>;
+    str_sprop_vertices >= sprop_vertices_lump;
+
+    imemstream str_sprop_materials(sprop_materials_lump_data.data(), sprop_materials_lump_data.size());
+    str_sprop_materials >> endianness<std::endian::little>;
+    str_sprop_materials >= sprop_materials_lump;
+
+    // calculate lighting for each vertex
+    for (const auto &prop : sprop_lump.entries) {
+        logging::parallel_for(0, (int)prop.num_vertices, [&](int vertex_idx) {
+            auto &vtx = sprop_vertices_lump.vertices[prop.first_vertex + vertex_idx];
+            auto vtx_col = CalcLightAtPointSurface(bsp, vtx.position + (vtx.normal * 1.0f), vtx.normal);
+
+            vtx.color[0] = (uint8_t)clampf(vtx_col[0], 0.0f, 255.0f);
+            vtx.color[1] = (uint8_t)clampf(vtx_col[1], 0.0f, 255.0f);
+            vtx.color[2] = (uint8_t)clampf(vtx_col[2], 0.0f, 255.0f);
+        });
+    }
+
+    // re-serialize vertices lump
+    std::ostringstream str_sprop_vertices_out(std::ios_base::in | std::ios_base::binary);
+    str_sprop_vertices_out << endianness<std::endian::little>;
+    str_sprop_vertices_out <= sprop_vertices_lump;
+
+    bspdata->bspx.entries.erase("SPROP_VERTICES");
+    bspdata->bspx.transfer("SPROP_VERTICES", StringToVector(str_sprop_vertices_out.str()));
+}
+
 static void LoadExtendedTexinfoFlags(const fs::path &sourcefilename, const mbsp_t *bsp)
 {
     // always create the zero'ed array
@@ -1341,6 +1403,8 @@ int light_main(int argc, const char **argv)
 
     mbsp_t &bsp = std::get<mbsp_t>(bspdata.bsp);
 
+    auto &bspx = bspdata.bspx;
+
     // mxd. Use 1.0 rangescale as a default to better match with qrad3/arghrad
     if (bspdata.loadversion->game->id == GAME_QUAKE_II) {
         if (!light_options.rangescale.is_changed()) {
@@ -1395,7 +1459,7 @@ int light_main(int argc, const char **argv)
     FindDebugFace(&bsp);
     FindDebugVert(&bsp);
 
-    Embree_TraceInit(&bsp);
+    Embree_TraceInit(&bsp, &bspx);
 
     if (light_options.debugmode == debugmodes::phong_obj) {
         CalculateVertexNormals(&bsp);
@@ -1421,6 +1485,7 @@ int light_main(int argc, const char **argv)
 
         LightGrid(&bspdata);
         SHGrid(&bspdata);
+        LightProps(&bsp, &bspdata);
 
         ClearLightmapSurfaces();
 

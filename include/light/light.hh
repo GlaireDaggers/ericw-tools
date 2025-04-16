@@ -194,6 +194,7 @@ extern int dump_facenum;
 extern int dump_vertnum;
 
 constexpr int CHANNEL_MASK_DEFAULT = 1;
+constexpr int CHANNEL_MASK_STATIC_PROP = 2;
 
 class modelinfo_t : public settings::setting_container
 {

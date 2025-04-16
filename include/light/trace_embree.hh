@@ -23,6 +23,8 @@
 #include <common/qvec.hh>
 #include <common/log.hh> // for FError
 
+#include <common/bspfile.hh>
+
 #include <vector>
 #include <set>
 
@@ -46,7 +48,7 @@ struct texture;
 }
 
 void ResetEmbree();
-void Embree_TraceInit(const mbsp_t *bsp);
+void Embree_TraceInit(const mbsp_t *bsp, const bspdata_t::bspxentries *bspx);
 const std::set<const mface_t *> &ShadowCastingSolidFacesSet();
 
 struct ray_io
