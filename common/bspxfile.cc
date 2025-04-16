@@ -225,3 +225,176 @@ void bspx_decoupled_lm_perface::stream_read(std::istream &s)
 {
     s >= std::tie(lmwidth, lmheight, offset, world_to_lm_space);
 }
+
+// bspx_leaf_sprop
+
+void bspx_leaf_sprop::stream_write(std::ostream &s) const
+{
+    // write entries
+    s <= static_cast<uint32_t>(entries.size());
+    s <= static_cast<uint32_t>(prop_indices.size());
+
+    for (const auto &entry : entries) {
+        s <= entry.first_prop;
+        s <= entry.num_props;
+    }
+
+    for (auto entry : prop_indices) {
+        s <= entry;
+    }
+}
+
+void bspx_leaf_sprop::stream_read(std::istream &s)
+{
+    entries.clear();
+    prop_indices.clear();
+
+    uint32_t num_entries;
+    s >= num_entries;
+
+    uint32_t num_indices;
+    s >= num_indices;
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        bspx_leaf_sprop_entry entry;
+        s >= entry.first_prop;
+        s >= entry.num_props;
+
+        entries.push_back(entry);
+    }
+
+    for (uint32_t i = 0; i < num_indices; i++) {
+        uint32_t prop_index;
+        s >= prop_index;
+
+        prop_indices.push_back(prop_index);
+    }
+}
+
+// bspx_sprop
+
+void bspx_sprop::stream_write(std::ostream &s) const
+{
+    s <= static_cast<uint32_t>(entries.size());
+
+    for (const auto &entry : entries) {
+        s <= entry.material;
+        s <= entry.mode;
+        s <= entry.first_index;
+        s <= entry.num_indices;
+        s <= entry.first_vertex;
+        s <= entry.num_vertices;
+    }
+}
+
+void bspx_sprop::stream_read(std::istream &s)
+{
+    entries.clear();
+
+    uint32_t num_entries;
+    s >= num_entries;
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        bspx_sprop_entry entry;
+        s >= entry.material;
+        s >= entry.mode;
+        s >= entry.first_index;
+        s >= entry.num_indices;
+        s >= entry.first_vertex;
+        s >= entry.num_vertices;
+
+        entries.push_back(entry);
+    }
+}
+
+// bspx_sprop_indices
+
+void bspx_sprop_indices::stream_write(std::ostream &s) const
+{
+    s <= static_cast<uint32_t>(indices.size());
+
+    for (auto idx : indices) {
+        s <= idx;
+    }
+}
+
+void bspx_sprop_indices::stream_read(std::istream &s)
+{
+    indices.clear();
+
+    uint32_t num_entries;
+    s >= num_entries;
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        uint16_t idx;
+        s >= idx;
+
+        indices.push_back(idx);
+    }
+}
+
+// bspx_sprop_vertices
+
+void bspx_sprop_vertices::stream_write(std::ostream &s) const
+{
+    s <= static_cast<uint32_t>(vertices.size());
+
+    for (const auto &vertex : vertices) {
+        s <= vertex.position;
+        s <= vertex.normal;
+        s <= vertex.tangent;
+        s <= vertex.texcoord;
+        s <= vertex.color[0];
+        s <= vertex.color[1];
+        s <= vertex.color[2];
+        s <= vertex.color[3];
+    }
+}
+
+void bspx_sprop_vertices::stream_read(std::istream &s)
+{
+    vertices.clear();
+
+    uint32_t num_entries;
+    s >= num_entries;
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        bspx_sprop_vertex vertex;
+        s >= vertex.position;
+        s >= vertex.normal;
+        s >= vertex.tangent;
+        s >= vertex.texcoord;
+        s >= vertex.color[0];
+        s >= vertex.color[1];
+        s >= vertex.color[2];
+        s >= vertex.color[3];
+
+        vertices.push_back(vertex);
+    }
+}
+
+// bspx_sprop_materials
+
+void bspx_sprop_materials::stream_write(std::ostream &s) const
+{
+    s <= static_cast<uint32_t>(materials.size());
+
+    for (const auto &mat : materials) {
+        s <= mat;
+    }
+}
+
+void bspx_sprop_materials::stream_read(std::istream &s)
+{
+    materials.clear();
+
+    uint32_t num_entries;
+    s >= num_entries;
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        std::array<char, 64> mat;
+        s >= mat;
+
+        materials.push_back(mat);
+    }
+}

@@ -233,6 +233,7 @@ public:
     setting_bool loghulls;
     setting_bool logbmodels;
     setting_bool debug_missing_portal_sides;
+    setting_bool export_static_prop_data;
 
     void set_parameters(int argc, const char **argv) override;
     void initialize(int argc, const char **argv) override;

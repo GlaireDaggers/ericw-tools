@@ -244,6 +244,12 @@ struct mapdata_t
     std::vector<uint8_t> exported_lmshifts;
     bool needslmshifts = false;
     std::vector<uint8_t> exported_bspxbrushes;
+    
+    std::vector<uint8_t> exported_bspx_leaf_static_prop;
+    std::vector<uint8_t> exported_bspx_static_prop;
+    std::vector<uint8_t> exported_bspx_static_prop_indices;
+    std::vector<uint8_t> exported_bspx_static_prop_vertices;
+    std::vector<uint8_t> exported_bspx_static_prop_materials;
 
     // Q2 stuff
     int32_t c_areas = 0;

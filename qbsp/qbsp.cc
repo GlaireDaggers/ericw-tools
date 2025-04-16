@@ -44,6 +44,10 @@
 
 #include <fmt/chrono.h>
 
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_STB_IMAGE_WRITE
+#include "../3rdparty/tiny_gltf.h"
+
 namespace settings
 {
 bool wadpath::operator<(const wadpath &other) const
@@ -565,7 +569,9 @@ qbsp_settings::qbsp_settings()
       loghulls{this, {"loghulls"}, false, &logging_group, "print log output for collision hulls"},
       logbmodels{this, {"logbmodels"}, false, &logging_group, "print log output for bmodels"},
       debug_missing_portal_sides{this, {"debug_missing_portal_sides"}, false, &logging_group,
-          "output debug .prt files for missing portal sides"}
+          "output debug .prt files for missing portal sides"},
+      export_static_prop_data{this, "export_static_prop_data", false, &map_development_group,
+          "output prop_static geometry to BSPX lumps"}
 {
 }
 
@@ -1675,6 +1681,570 @@ static void LoadSecondaryTextures()
 
 /*
 =================
+UnpackStaticProps
+=================
+*/
+static void UnpackPropMesh(const tinygltf::Model &model, const qmat4x4f trs, const tinygltf::Node& node, const tinygltf::Mesh& mesh, const std::vector<uint32_t> &materials,
+    bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+{
+    for (const auto &prim : mesh.primitives)
+    {
+        // "here's some positionless vertices for you to not render"
+        // - statements dreamed up by the utterly deranged
+        if (!prim.attributes.contains("POSITION"))
+        {
+            continue;
+        }
+
+        if (prim.mode != TINYGLTF_MODE_TRIANGLES && prim.mode != TINYGLTF_MODE_TRIANGLE_STRIP)
+        {
+            logging::print("Unsupported topology in model (only triangles or triangle strips)");
+            continue;
+        }
+        
+        const auto &index_accessor = model.accessors[prim.indices];
+        const auto &index_buffer_view = model.bufferViews[index_accessor.bufferView];
+        const auto &index_buffer = model.buffers[index_buffer_view.buffer];
+        const auto index_data_address = index_buffer.data.data() + index_buffer_view.byteOffset + index_accessor.byteOffset;
+        const auto index_stride = index_accessor.ByteStride(index_buffer_view);
+
+        const auto &position_accessor = model.accessors[prim.attributes.at("POSITION")];
+        const auto &position_buffer_view = model.bufferViews[position_accessor.bufferView];
+        const auto &position_buffer = model.buffers[position_buffer_view.buffer];
+        const auto position_data_address = position_buffer.data.data() + position_buffer_view.byteOffset + position_accessor.byteOffset;
+        const auto position_stride = position_accessor.ByteStride(position_buffer_view);
+
+        uint32_t first_index = sprop_indices.indices.size();
+        uint32_t first_vertex = sprop_vertices.vertices.size();
+
+        if (index_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+        {
+            sprop_indices.indices.reserve(sprop_indices.indices.size() + index_accessor.count);
+
+            for (uint32_t i = 0; i < index_accessor.count; i++)
+            {
+                const uint16_t src = *reinterpret_cast<const uint16_t*>(index_data_address + (i * index_stride));
+                sprop_indices.indices.push_back(src);
+            }
+        }
+        else if (index_accessor.componentType == TINYGLTF_COMPONENT_TYPE_SHORT)
+        {
+            sprop_indices.indices.reserve(sprop_indices.indices.size() + index_accessor.count);
+
+            for (uint32_t i = 0; i < index_accessor.count; i++)
+            {
+                const int16_t src = *reinterpret_cast<const int16_t*>(index_data_address + (i * index_stride));
+                if (src < 0 || src > UINT16_MAX)
+                {
+                    logging::print("WARNING: Model index exceeds range of unsigned 16-bit. Expect corruption.");
+                }
+                sprop_indices.indices.push_back((uint16_t)src);
+            }
+        }
+        else if (index_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+        {
+            sprop_indices.indices.reserve(sprop_indices.indices.size() + index_accessor.count);
+
+            for (uint32_t i = 0; i < index_accessor.count; i++)
+            {
+                const uint32_t src = *reinterpret_cast<const uint32_t*>(index_data_address + (i * index_stride));
+                if (src > UINT16_MAX)
+                {
+                    logging::print("WARNING: Model index exceeds range of unsigned 16-bit. Expect corruption.");
+                }
+                sprop_indices.indices.push_back((uint16_t)src);
+            }
+        }
+        else if (index_accessor.componentType == TINYGLTF_COMPONENT_TYPE_INT)
+        {
+            sprop_indices.indices.reserve(sprop_indices.indices.size() + index_accessor.count);
+
+            for (uint32_t i = 0; i < index_accessor.count; i++)
+            {
+                const int32_t src = *reinterpret_cast<const int32_t*>(index_data_address + (i * index_stride));
+                if (src < 0 || src > UINT16_MAX)
+                {
+                    logging::print("WARNING: Model index exceeds range of unsigned 16-bit. Expect corruption.");
+                }
+                sprop_indices.indices.push_back((uint16_t)src);
+            }
+        }
+        else
+        {
+            // unsupported index type
+            logging::print("Model primitive has unsupported index type\n");
+            continue;
+        }
+
+        std::vector<bspx_sprop_vertex> vertices;
+        vertices.resize(position_accessor.count);
+
+        if (position_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+        {
+            for (int i = 0; i < position_accessor.count; i++)
+            {
+                const float *src = reinterpret_cast<const float*>(position_data_address + (i * position_stride));
+                vertices[i].position[0] = src[0];
+                vertices[i].position[1] = -src[2];
+                vertices[i].position[2] = src[1];
+            }
+        }
+        else if (position_accessor.componentType == TINYGLTF_COMPONENT_TYPE_DOUBLE)
+        {
+            for (int i = 0; i < position_accessor.count; i++)
+            {
+                const double *src = reinterpret_cast<const double*>(position_data_address + (i * position_stride));
+                vertices[i].position[0] = (float)src[0];
+                vertices[i].position[1] = -(float)src[2];
+                vertices[i].position[2] = (float)src[1];
+            }
+        }
+
+        if (prim.attributes.contains("NORMAL"))
+        {
+            const auto &normal_accessor = model.accessors[prim.attributes.at("NORMAL")];
+            const auto &normal_buffer_view = model.bufferViews[normal_accessor.bufferView];
+            const auto &normal_buffer = model.buffers[normal_buffer_view.buffer];
+            const auto normal_data_address = normal_buffer.data.data() + normal_buffer_view.byteOffset + normal_accessor.byteOffset;
+            const auto normal_stride = normal_accessor.ByteStride(normal_buffer_view);
+
+            if (normal_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+            {
+                for (int i = 0; i < normal_accessor.count; i++)
+                {
+                    const float *src = reinterpret_cast<const float*>(normal_data_address + (i * normal_stride));
+                    vertices[i].normal[0] = src[0];
+                    vertices[i].normal[1] = -src[2];
+                    vertices[i].normal[2] = src[1];
+                }
+            }
+            else if (normal_accessor.componentType == TINYGLTF_COMPONENT_TYPE_DOUBLE)
+            {
+                for (int i = 0; i < normal_accessor.count; i++)
+                {
+                    const double *src = reinterpret_cast<const double*>(normal_data_address + (i * normal_stride));
+                    vertices[i].normal[0] = (float)src[0];
+                    vertices[i].normal[1] = -(float)src[2];
+                    vertices[i].normal[2] = (float)src[1];
+                }
+            }
+        }
+
+        if (prim.attributes.contains("TANGENT"))
+        {
+            const auto &tangent_accessor = model.accessors[prim.attributes.at("TANGENT")];
+            const auto &tangent_buffer_view = model.bufferViews[tangent_accessor.bufferView];
+            const auto &tangent_buffer = model.buffers[tangent_buffer_view.buffer];
+            const auto tangent_data_address = tangent_buffer.data.data() + tangent_buffer_view.byteOffset + tangent_accessor.byteOffset;
+            const auto tangent_stride = tangent_accessor.ByteStride(tangent_buffer_view);
+
+            if (tangent_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+            {
+                for (int i = 0; i < tangent_accessor.count; i++)
+                {
+                    const float *src = reinterpret_cast<const float*>(tangent_data_address + (i * tangent_stride));
+                    vertices[i].tangent[0] = src[0];
+                    vertices[i].tangent[1] = -src[2];
+                    vertices[i].tangent[2] = src[1];
+                    vertices[i].tangent[3] = src[3];
+                }
+            }
+            else if (tangent_accessor.componentType == TINYGLTF_COMPONENT_TYPE_DOUBLE)
+            {
+                for (int i = 0; i < tangent_accessor.count; i++)
+                {
+                    const double *src = reinterpret_cast<const double*>(tangent_data_address + (i * tangent_stride));
+                    vertices[i].tangent[0] = (float)src[0];
+                    vertices[i].tangent[1] = -(float)src[2];
+                    vertices[i].tangent[2] = (float)src[1];
+                    vertices[i].tangent[3] = (float)src[3];
+                }
+            }
+        }
+
+        if (prim.attributes.contains("TEXCOORD_0"))
+        {
+            const auto &texcoord_accessor = model.accessors[prim.attributes.at("TEXCOORD_0")];
+            const auto &texcoord_buffer_view = model.bufferViews[texcoord_accessor.bufferView];
+            const auto &texcoord_buffer = model.buffers[texcoord_buffer_view.buffer];
+            const auto texcoord_data_address = texcoord_buffer.data.data() + texcoord_buffer_view.byteOffset + texcoord_accessor.byteOffset;
+            const auto texcoord_stride = texcoord_accessor.ByteStride(texcoord_buffer_view);
+
+            if (texcoord_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+            {
+                for (int i = 0; i < texcoord_accessor.count; i++)
+                {
+                    const float *src = reinterpret_cast<const float*>(texcoord_data_address + (i * texcoord_stride));
+                    vertices[i].texcoord[0] = src[0];
+                    vertices[i].texcoord[1] = src[1];
+                }
+            }
+            else if (texcoord_accessor.componentType == TINYGLTF_COMPONENT_TYPE_DOUBLE)
+            {
+                for (int i = 0; i < texcoord_accessor.count; i++)
+                {
+                    const double *src = reinterpret_cast<const double*>(texcoord_data_address + (i * texcoord_stride));
+                    vertices[i].texcoord[0] = (float)src[0];
+                    vertices[i].texcoord[1] = (float)src[1];
+                }
+            }
+            else if (texcoord_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+            {
+                for (int i = 0; i < texcoord_accessor.count; i++)
+                {
+                    const uint8_t *src = reinterpret_cast<const uint8_t*>(texcoord_data_address + (i * texcoord_stride));
+                    vertices[i].texcoord[0] = (float)src[0] / 255.0f;
+                    vertices[i].texcoord[1] = (float)src[1] / 255.0f;
+                }
+            }
+            else if (texcoord_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+            {
+                for (int i = 0; i < texcoord_accessor.count; i++)
+                {
+                    const uint16_t *src = reinterpret_cast<const uint16_t*>(texcoord_data_address + (i * texcoord_stride));
+                    vertices[i].texcoord[0] = (float)src[0] / 65535.0f;
+                    vertices[i].texcoord[1] = (float)src[1] / 65535.0f;
+                }
+            }
+        }
+
+        if (prim.attributes.contains("COLOR_0"))
+        {
+            const auto &color_accessor = model.accessors[prim.attributes.at("COLOR_0")];
+            const auto &color_buffer_view = model.bufferViews[color_accessor.bufferView];
+            const auto &color_buffer = model.buffers[color_buffer_view.buffer];
+            const auto color_data_address = color_buffer.data.data() + color_buffer_view.byteOffset + color_accessor.byteOffset;
+            const auto color_stride = color_accessor.ByteStride(color_buffer_view);
+
+            if (color_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT)
+            {
+                for (int i = 0; i < color_accessor.count; i++)
+                {
+                    const float *src = reinterpret_cast<const float*>(color_data_address + (i * color_stride));
+                    vertices[i].color[0] = (uint8_t)(src[0] * 255.0f);
+                    vertices[i].color[1] = (uint8_t)(src[1] * 255.0f);
+                    vertices[i].color[2] = (uint8_t)(src[2] * 255.0f);
+                    vertices[i].color[3] = 255;
+
+                    if (color_accessor.type == TINYGLTF_TYPE_VEC4)
+                    {
+                        vertices[i].color[3] = (uint8_t)(src[3] * 255.0f);
+                    }
+                }
+            }
+            else if (color_accessor.componentType == TINYGLTF_COMPONENT_TYPE_DOUBLE)
+            {
+                for (int i = 0; i < color_accessor.count; i++)
+                {
+                    const double *src = reinterpret_cast<const double*>(color_data_address + (i * color_stride));
+                    vertices[i].color[0] = (uint8_t)(src[0] * 255.0);
+                    vertices[i].color[1] = (uint8_t)(src[1] * 255.0);
+                    vertices[i].color[2] = (uint8_t)(src[2] * 255.0);
+                    vertices[i].color[3] = 255;
+
+                    if (color_accessor.type == TINYGLTF_TYPE_VEC4)
+                    {
+                        vertices[i].color[3] = (uint8_t)(src[3] * 255.0);
+                    }
+                }
+            }
+            else if (color_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+            {
+                for (int i = 0; i < color_accessor.count; i++)
+                {
+                    const uint8_t *src = reinterpret_cast<const uint8_t*>(color_data_address + (i * color_stride));
+                    vertices[i].color[0] = src[0];
+                    vertices[i].color[1] = src[1];
+                    vertices[i].color[2] = src[2];
+                    vertices[i].color[3] = 255;
+
+                    if (color_accessor.type == TINYGLTF_TYPE_VEC4)
+                    {
+                        vertices[i].color[3] = src[3];
+                    }
+                }
+            }
+            else if (color_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+            {
+                for (int i = 0; i < color_accessor.count; i++)
+                {
+                    const uint16_t *src = reinterpret_cast<const uint16_t*>(color_data_address + (i * color_stride));
+                    vertices[i].color[0] = src[0] >> 8;
+                    vertices[i].color[1] = src[1] >> 8;
+                    vertices[i].color[2] = src[2] >> 8;
+                    vertices[i].color[3] = 255;
+
+                    if (color_accessor.type == TINYGLTF_TYPE_VEC4)
+                    {
+                        vertices[i].color[3] = src[3] >> 8;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (auto &vtx : vertices)
+            {
+                vtx.color[0] = 255;
+                vtx.color[1] = 255;
+                vtx.color[2] = 255;
+                vtx.color[3] = 255;
+            }
+        }
+
+        for (int i = 0; i < position_accessor.count; i++)
+        {
+            vertices[i].position = trs * qvec4f(vertices[i].position, 1.0f);
+            vertices[i].normal = trs * qvec4f(vertices[i].normal, 0.0f);
+
+            float tan_w = vertices[i].tangent[3];
+            qvec3f tan = vertices[i].tangent;
+            tan = trs * qvec4f(tan, 0.0f);
+
+            vertices[i].tangent = qvec4f(tan, tan_w);
+        }
+
+        sprop_vertices.vertices.insert(sprop_vertices.vertices.end(), vertices.begin(), vertices.end());
+        auto &sprop_info = sprop.entries.emplace_back();
+
+        sprop_info.material = materials[prim.material];
+
+        if (prim.mode == TINYGLTF_MODE_TRIANGLES) {
+            sprop_info.mode = 0;
+            num_triangles.count += index_accessor.count / 3;
+        }
+        else if (prim.mode == TINYGLTF_MODE_TRIANGLE_STRIP) {
+            sprop_info.mode = 1;
+            num_triangles.count += index_accessor.count - 2;
+        }
+        
+        sprop_info.first_index = first_index;
+        sprop_info.num_indices = index_accessor.count;
+        sprop_info.first_vertex = first_vertex;
+        sprop_info.num_vertices = position_accessor.count;
+
+        num_static_props.count += 1;
+    }
+}
+
+static void UnpackPropNode(const tinygltf::Model &model, const qmat4x4f trs, int node_id, const std::vector<uint32_t> &materials,
+    bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+{
+    const auto &node = model.nodes[node_id];
+
+    if (node.mesh != -1)
+    {
+        // unpack mesh
+        const auto &mesh = model.meshes[node.mesh];
+        UnpackPropMesh(model, trs, node, mesh, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+    }
+
+    for (auto child : node.children)
+    {
+        UnpackPropNode(model, trs, child, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+    }
+}
+
+static void UnpackPropHierarchy(const tinygltf::Model &model, const qmat4x4f trs, const std::vector<uint32_t> &materials,
+    bspx_sprop &sprop, bspx_sprop_indices &sprop_indices, bspx_sprop_vertices &sprop_vertices,
+    logging::stat_tracker_t::stat &num_static_props, logging::stat_tracker_t::stat &num_triangles)
+{
+    const auto &default_scene = model.scenes[model.defaultScene];
+
+    for (auto node_id : default_scene.nodes)
+    {
+        UnpackPropNode(model, trs, node_id, materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_triangles);
+    }
+}
+
+static void UnpackStaticProps()
+{
+    if (!qbsp_options.export_static_prop_data.value()) {
+        return;
+    }
+
+    logging::funcheader();
+
+    logging::stat_tracker_t stat_print;
+    auto &num_static_props = stat_print.register_stat("static prop meshes");
+    auto &num_static_prop_tris = stat_print.register_stat("total triangles");
+
+    // lumps
+    bspx_leaf_sprop leaf_sprop;
+    bspx_sprop sprop;
+    bspx_sprop_indices sprop_indices;
+    bspx_sprop_vertices sprop_vertices;
+    bspx_sprop_materials sprop_materials;
+
+    tinygltf::TinyGLTF loader;
+
+    // cache of already loaded models
+    std::map<std::string, tinygltf::Model> modelcache;
+
+    // cache of model material IDs
+    std::map<std::string, uint32_t> matcache;
+
+    // iterate prop_static entities in map
+    for (auto &entity : map.entities) {
+        if (entity.epairs.get("classname") == "prop_static") {
+            auto modelpath = entity.epairs.get("model");
+            auto fullpath = qbsp_options.basedir.value() / modelpath;
+            auto modelname = fullpath.stem().string();
+
+            logging::print(logging::flag::STAT, "Processing static prop ({})\n", modelname);
+
+            bool loaded = false;
+            tinygltf::Model model;
+
+            if (modelcache.contains(modelpath)) {
+                loaded = true;
+                model = modelcache[modelpath];
+            }
+            else {
+                logging::print(logging::flag::STAT, "Loading: {}\n", modelpath);
+
+                std::string err;
+                std::string warn;
+
+                if (modelpath.ends_with(".glb")) {
+                    loaded = loader.LoadBinaryFromFile(&model, &err, &warn, fullpath);
+                }
+                else {
+                    loaded = loader.LoadASCIIFromFile(&model, &err, &warn, fullpath);
+                }
+
+                if (!warn.empty()) {
+                    logging::print("WARNING: {}\n", warn);
+                }
+
+                if (!err.empty()) {
+                    logging::print("ERROR: {}\n", err);
+                }
+
+                if (loaded) {
+                    modelcache[modelpath] = model;
+                }
+            }
+
+            // model couldn't be loaded, skip this prop...
+            if (!loaded) {
+                continue;
+            }
+
+            qvec3f entity_scale = qvec3f { 1.0f, 1.0f, 1.0f };
+            entity.epairs.get_vector("scale", entity_scale);
+
+            qvec3f entity_rot = qvec3f { 0.0f, 0.0f, 0.0f };
+            entity.epairs.get_vector("angles", entity_rot);
+
+            float sx = sinf(DEG2RAD(-entity_rot[2]));
+            float cx = cosf(DEG2RAD(-entity_rot[2]));
+
+            float sy = sinf(DEG2RAD(-entity_rot[0]));
+            float cy = cosf(DEG2RAD(-entity_rot[0]));
+
+            float sz = sinf(DEG2RAD(entity_rot[1]));
+            float cz = cosf(DEG2RAD(entity_rot[1]));
+
+            // create root transform for static prop
+            qmat4x4f prop_translate = qmat4x4f {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                entity.origin[0], entity.origin[1], entity.origin[2], 1.0f,
+            };
+            
+            qmat4x4f prop_rotate_x = qmat4x4f {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, cx, -sx, 0.0f,
+                0.0f, sx, cx, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            };
+
+            qmat4x4f prop_rotate_y = qmat4x4f {
+                cy, 0.0f, sy, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                -sy, 0.0f, cy, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            };
+
+            qmat4x4f prop_rotate_z = qmat4x4f {
+                cz, sz, 0.0f, 0.0f,
+                -sz, cz, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            };
+
+            qmat4x4f prop_scale = qmat4x4f {
+                entity_scale[0], 0.0f, 0.0f, 0.0f,
+                0.0f, entity_scale[1], 0.0f, 0.0f,
+                0.0f, 0.0f, entity_scale[2], 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            };
+
+            qmat4x4f prop_trs = prop_translate * prop_rotate_x * prop_rotate_z * prop_rotate_y * prop_scale;
+
+            std::vector<uint32_t> prop_materials;
+
+            // place unique materials into array of material info
+            for (auto &mat : model.materials) {
+                auto mat_id = modelname + "/" + mat.name;
+                if (!matcache.contains(mat_id)) {
+                    matcache[mat_id] = sprop_materials.materials.size();
+                    auto &dest_name = sprop_materials.materials.emplace_back();
+
+                    if (mat_id.size() > (dest_name.size() - 1)) {
+                        logging::print("WARNING: material name '{}' exceeds maximum length {} and will be truncated\n", mat_id,
+                            dest_name.size() - 1);
+                    }
+                    for (size_t i = 0; i < (dest_name.size() - 1); ++i) {
+                        if (i < mat_id.size())
+                            dest_name[i] = mat_id[i];
+                        else
+                            dest_name[i] = '\0';
+                    }
+                    dest_name[dest_name.size() - 1] = '\0';
+                }
+
+                prop_materials.push_back(matcache[mat_id]);
+            }
+
+            // walk node hierarchy to find mesh parts
+            UnpackPropHierarchy(model, prop_trs, prop_materials, sprop, sprop_indices, sprop_vertices, num_static_props, num_static_prop_tris);
+        }
+    }
+    
+    // serialize lumps
+    std::ostringstream str_sprop(std::ios_base::out | std::ios_base::binary);
+    str_sprop << endianness<std::endian::little>;
+    str_sprop <= sprop;
+    map.exported_bspx_static_prop = StringToVector(str_sprop.str());
+
+    std::ostringstream str_sprop_indices(std::ios_base::out | std::ios_base::binary);
+    str_sprop_indices << endianness<std::endian::little>;
+    str_sprop_indices <= sprop_indices;
+    map.exported_bspx_static_prop_indices = StringToVector(str_sprop_indices.str());
+
+    std::ostringstream str_sprop_vertices(std::ios_base::out | std::ios_base::binary);
+    str_sprop_vertices << endianness<std::endian::little>;
+    str_sprop_vertices <= sprop_vertices;
+    map.exported_bspx_static_prop_vertices = StringToVector(str_sprop_vertices.str());
+
+    std::ostringstream str_sprop_materials(std::ios_base::out | std::ios_base::binary);
+    str_sprop_materials << endianness<std::endian::little>;
+    str_sprop_materials <= sprop_materials;
+    map.exported_bspx_static_prop_materials = StringToVector(str_sprop_materials.str());
+
+    // remove prop_static entities from map
+    map.entities.erase(std::remove_if(map.entities.begin(), map.entities.end(), [](mapentity_t &entity) {
+        return entity.epairs.get("classname") == "prop_static";
+    }), map.entities.end());
+}
+
+/*
+=================
 ProcessFile
 =================
 */
@@ -1704,6 +2274,9 @@ void ProcessFile()
 
     // create hulls!
     CreateHulls();
+
+    // unpack static props & remove them from entities array
+    UnpackStaticProps();
 
     WriteEntitiesToString();
     BSPX_CreateBrushList();

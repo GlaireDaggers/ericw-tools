@@ -400,6 +400,21 @@ static void WriteBSPFile()
     if (!map.exported_bspxbrushes.empty()) {
         bspdata.bspx.transfer("BRUSHLIST", map.exported_bspxbrushes);
     }
+    if (!map.exported_bspx_leaf_static_prop.empty()) {
+        bspdata.bspx.transfer("LEAF_SPROP", map.exported_bspx_leaf_static_prop);
+    }
+    if (!map.exported_bspx_static_prop.empty()) {
+        bspdata.bspx.transfer("SPROP", map.exported_bspx_static_prop);
+    }
+    if (!map.exported_bspx_static_prop_indices.empty()) {
+        bspdata.bspx.transfer("SPROP_INDICES", map.exported_bspx_static_prop_indices);
+    }
+    if (!map.exported_bspx_static_prop_vertices.empty()) {
+        bspdata.bspx.transfer("SPROP_VERTICES", map.exported_bspx_static_prop_vertices);
+    }
+    if (!map.exported_bspx_static_prop_materials.empty()) {
+        bspdata.bspx.transfer("SPROP_MATERIALS", map.exported_bspx_static_prop_materials);
+    }
 
     const size_t num_faces = std::get<mbsp_t>(bspdata.bsp).dfaces.size();
 

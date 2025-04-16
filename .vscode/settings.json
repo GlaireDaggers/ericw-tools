@@ -1,5 +1,26 @@
 {
     "search.exclude": {
         "3rdparty/**": true
+    },
+    "files.associations": {
+        "*.tcc": "cpp",
+        "deque": "cpp",
+        "forward_list": "cpp",
+        "list": "cpp",
+        "string": "cpp",
+        "unordered_map": "cpp",
+        "unordered_set": "cpp",
+        "vector": "cpp",
+        "any": "cpp",
+        "system_error": "cpp",
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "__tree": "cpp",
+        "atomic": "cpp",
+        "filesystem": "cpp",
+        "ios": "cpp",
+        "map": "cpp",
+        "set": "cpp",
+        "array": "cpp"
     }
 }

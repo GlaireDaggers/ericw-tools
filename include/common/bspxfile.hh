@@ -149,4 +149,84 @@ struct bspx_decoupled_lm_perface
     void stream_read(std::istream &s);
 };
 
+// LEAF_SPROP BSPX lump
+struct bspx_leaf_sprop_entry
+{
+    uint32_t first_prop;
+    uint32_t num_props;
+};
+
+struct bspx_leaf_sprop
+{
+    // array of entries, one per BSP leaf
+    std::vector<bspx_leaf_sprop_entry> entries;
+
+    // array of prop indices
+    std::vector<uint32_t> prop_indices;
+
+    // serialize for streams
+    void stream_write(std::ostream &s) const;
+    void stream_read(std::istream &s);
+};
+
+// SPROP BSPX lump
+struct bspx_sprop_entry
+{
+    uint32_t material;
+    uint32_t mode;
+    uint32_t first_index;
+    uint32_t num_indices;
+    uint32_t first_vertex;
+    uint32_t num_vertices;
+};
+
+struct bspx_sprop
+{
+    // array of entries, one per static prop in map
+    std::vector<bspx_sprop_entry> entries;
+
+    // serialize for streams
+    void stream_write(std::ostream &s) const;
+    void stream_read(std::istream &s);
+};
+
+// SPROP_INDICES BSPX lump
+struct bspx_sprop_indices
+{
+    std::vector<uint16_t> indices;
+
+    // serialize for streams
+    void stream_write(std::ostream &s) const;
+    void stream_read(std::istream &s);
+};
+
+// SPROP_VERTICES BSPX lump
+struct bspx_sprop_vertex
+{
+    qvec3f position;
+    qvec3f normal;
+    qvec4f tangent;
+    qvec2f texcoord;
+    uint8_t color[4];
+};
+
+struct bspx_sprop_vertices
+{
+    std::vector<bspx_sprop_vertex> vertices;
+
+    // serialize for streams
+    void stream_write(std::ostream &s) const;
+    void stream_read(std::istream &s);
+};
+
+// SPROP_MATERIALS BSPX lump
+struct bspx_sprop_materials
+{
+    std::vector<std::array<char, 64>> materials;
+
+    // serialize for streams
+    void stream_write(std::ostream &s) const;
+    void stream_read(std::istream &s);
+};
+
 // BSPX data
