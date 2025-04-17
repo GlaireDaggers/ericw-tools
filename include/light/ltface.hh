@@ -78,6 +78,15 @@ struct sh_sample_t
     qvec3f l1[3];
 };
 
+struct sh_probe_t
+{
+    std::array<sh_sample_t, 4> samples_by_style;
+    std::array<uint8_t, 4> styles;
+    int used_styles;
+
+    void add(const qvec3f &direction, const qvec3f &color, int style);
+};
+
 struct lightgrid_samples_t
 {
     std::array<lightgrid_sample_t, 4> samples_by_style;
@@ -92,6 +101,6 @@ struct lightgrid_samples_t
 };
 
 lightgrid_samples_t CalcLightgridAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
-sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
+sh_probe_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
 qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal);
 void ResetLtFace();

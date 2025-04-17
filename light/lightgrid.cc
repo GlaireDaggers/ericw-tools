@@ -79,7 +79,7 @@ struct lshgrid_raw_data
     qvec3f grid_dist;
     qvec3f grid_mins;
     qvec3i grid_size;
-    std::vector<sh_sample_t> grid_result;
+    std::vector<sh_probe_t> grid_result;
 
     int get_grid_index(int x, int y, int z) const { return (grid_size[0] * grid_size[1] * z) + (grid_size[0] * y) + x; }
 
@@ -388,18 +388,29 @@ static std::vector<uint8_t> MakeLSHGridLump(const mbsp_t &bsp, const lshgrid_raw
     str <= data.grid_mins;
 
     for (int i = 0; i < data.grid_result.size(); i++) {
-        str <= data.grid_result[i].l0[0];
-        str <= data.grid_result[i].l0[1];
-        str <= data.grid_result[i].l0[2];
-        str <= data.grid_result[i].l1[0][0];
-        str <= data.grid_result[i].l1[0][1];
-        str <= data.grid_result[i].l1[0][2];
-        str <= data.grid_result[i].l1[1][0];
-        str <= data.grid_result[i].l1[1][1];
-        str <= data.grid_result[i].l1[1][2];
-        str <= data.grid_result[i].l1[2][0];
-        str <= data.grid_result[i].l1[2][1];
-        str <= data.grid_result[i].l1[2][2];
+        for (int style = 0; style < 4; style++)
+        {
+            str <= data.grid_result[i].styles[style];
+        }
+
+        for (int style = 0; style < 4; style++)
+        {
+            if (data.grid_result[i].styles[style] != 255)
+            {
+                str <= data.grid_result[i].samples_by_style[style].l0[0];
+                str <= data.grid_result[i].samples_by_style[style].l0[1];
+                str <= data.grid_result[i].samples_by_style[style].l0[2];
+                str <= data.grid_result[i].samples_by_style[style].l1[0][0];
+                str <= data.grid_result[i].samples_by_style[style].l1[0][1];
+                str <= data.grid_result[i].samples_by_style[style].l1[0][2];
+                str <= data.grid_result[i].samples_by_style[style].l1[1][0];
+                str <= data.grid_result[i].samples_by_style[style].l1[1][1];
+                str <= data.grid_result[i].samples_by_style[style].l1[1][2];
+                str <= data.grid_result[i].samples_by_style[style].l1[2][0];
+                str <= data.grid_result[i].samples_by_style[style].l1[2][1];
+                str <= data.grid_result[i].samples_by_style[style].l1[2][2];
+            }
+        }
     }
 
     auto vec = StringToVector(str.str());
@@ -427,7 +438,7 @@ std::tuple<lightgrid_samples_t, bool> FixPointAndCalcLightgrid(const mbsp_t *bsp
     return {samples, occluded};
 }
 
-sh_sample_t FixPointAndCalcSH(const mbsp_t *bsp, qvec3f world_point)
+sh_probe_t FixPointAndCalcSH(const mbsp_t *bsp, qvec3f world_point)
 {
     bool occluded = Light_PointInWorld(bsp, world_point);
     if (occluded) {
@@ -439,7 +450,10 @@ sh_sample_t FixPointAndCalcSH(const mbsp_t *bsp, qvec3f world_point)
         }
     }
 
-    sh_sample_t sample { 0 };
+    sh_probe_t sample { 0 };
+
+    // initialize unused styles to 255
+    sample.styles[0] = sample.styles[1] = sample.styles[2] = sample.styles[3] = 255;
 
     if (!occluded)
         sample = CalcSHAtPoint(bsp, world_point);
@@ -541,9 +555,9 @@ void SHGrid(bspdata_t *bspdata)
 
         qvec3f world_point = data.grid_mins + (qvec3f{x, y, z} * data.grid_dist);
 
-        sh_sample_t sample = FixPointAndCalcSH(&bsp, world_point);
+        sh_probe_t probe = FixPointAndCalcSH(&bsp, world_point);
 
-        data.grid_result[sample_index] = sample;
+        data.grid_result[sample_index] = probe;
     });
 
     logging::print("     {} lshgrid_dist\n", data.grid_dist);

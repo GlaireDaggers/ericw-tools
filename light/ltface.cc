@@ -2213,7 +2213,7 @@ LightPoint_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, rays
 
 static void // mxd
 SH_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_occlusion_t &rs, bool bounce,
-    float standard_scale, float sky_scale, float hotspot_clamp, const qvec3f &surfpoint, sh_sample_t &result)
+    float standard_scale, float sky_scale, float hotspot_clamp, const qvec3f &surfpoint, sh_probe_t &result)
 {
     const settings::worldspawn_keys &cfg = light_options;
     const float surflight_gate = light_options.emissivequality.value() == emissivequality_t::HIGH ? 0 : 0.01f;
@@ -2282,7 +2282,7 @@ SH_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_oc
                     qvec3f indirect = rs.getPushedRayColor(j);
                     qvec3f rayDir = rs.getPushedRayDir(j) * -1.0f;
 
-                    SumSH(qv::normalize(rayDir), indirect, result);
+                    result.add(qv::normalize(rayDir), indirect, vpl_settings.style);
                 }
             }
         }
@@ -2927,6 +2927,61 @@ void PostProcessLightFace(const mbsp_t *bsp, lightsurf_t &lightsurf, const setti
     if (light_options.debugmode == debugmodes::mottle)
         LightFace_DebugMottle(bsp, &lightsurf, lightmaps);
 }
+
+// sh
+
+static float GetSHBrightness(const sh_sample_t &sample)
+{
+    float r = sample.l0[0] + qv::length(sample.l1[0]);
+    float g = sample.l0[1] + qv::length(sample.l1[1]);
+    float b = sample.l0[2] + qv::length(sample.l1[2]);
+
+    return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+}
+
+void sh_probe_t::add(const qvec3f &direction, const qvec3f &color, int style)
+{
+    // if there's an existing probe of the same style, just sum them
+    for (int i = 0; i < used_styles; i++)
+    {
+        if (styles[i] == style)
+        {
+            SumSH(direction, color, samples_by_style[i]);
+            return;
+        }
+    }
+    
+    auto new_sample = sh_sample_t { 0 };
+    SumSH(direction, color, new_sample);
+
+    // otherwise, if we have room, just add a new style
+    if (used_styles < samples_by_style.size())
+    {
+        samples_by_style[used_styles] = new_sample;
+        styles[used_styles] = (uint8_t)style;
+        used_styles++;
+    }
+    // no room - replace the probe with the lowest brightness
+    else
+    {
+        int lowest_probe = 0;
+        float lowest_brightness = GetSHBrightness(samples_by_style[0]);
+
+        for (int i = 1; i < used_styles; i++)
+        {
+            float brightness = GetSHBrightness(samples_by_style[i]);
+            if (brightness < lowest_brightness)
+            {
+                brightness = lowest_brightness;
+                lowest_probe = 0;
+            }
+        }
+
+        samples_by_style[lowest_probe] = new_sample;
+        styles[lowest_probe] = style;
+    }
+}
+
 // lightgrid
 
 lightgrid_samples_t &lightgrid_samples_t::operator+=(const lightgrid_samples_t &other) noexcept
@@ -3126,7 +3181,7 @@ lightgrid_samples_t CalcLightgridAtPoint(const mbsp_t *bsp, const qvec3f &world_
     return result;
 }
 
-sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
+sh_probe_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
 {
     // TODO: use more than 1 ray for better performance
     raystream_occlusion_t rs(1);
@@ -3136,7 +3191,10 @@ sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
 
     auto &cfg = light_options;
 
-    sh_sample_t result { 0 };
+    sh_probe_t result { 0 };
+
+    // initialize unused styles to 255
+    result.styles[0] = result.styles[1] = result.styles[2] = result.styles[3] = 255;
 
     // from DirectLightFace
 
@@ -3157,7 +3215,10 @@ sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
             LightPoint_Entity(bsp, rs, entity.get(), world_point, sample);
 
             qvec3f dir = qv::normalize(world_point - entity.get()->origin.value()) * -1.0f;
-            SumSH(dir, sample.samples_by_style[0].color, result);
+            
+            for (int i = 0; i < sample.used_styles(); i++) {
+                result.add(dir, sample.samples_by_style[i].color, sample.samples_by_style[i].style);
+            }
         }
     }
 
@@ -3166,7 +3227,9 @@ sh_sample_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
             lightgrid_samples_t sample;
             LightPoint_Sky(bsp, rsi, &sun, world_point, sample);
 
-            SumSH(qv::normalize(sun.sunvec), sample.samples_by_style[0].color, result);
+            for (int i = 0; i < sample.used_styles(); i++) {
+                result.add(qv::normalize(sun.sunvec), sample.samples_by_style[i].color, sample.samples_by_style[i].style);
+            }
         }
     }
 
