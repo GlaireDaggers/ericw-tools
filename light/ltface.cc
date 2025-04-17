@@ -2291,7 +2291,7 @@ SH_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_oc
 
 static void // mxd
 PointSurf_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, raystream_occlusion_t &rs, bool bounce,
-    float standard_scale, float sky_scale, float hotspot_clamp, const qvec3f &surfpoint, const qvec3f &surfnrm, qvec3f &result)
+    float standard_scale, float sky_scale, float hotspot_clamp, const qvec3f &surfpoint, const qvec3f &surfnrm, lightgrid_samples_t &result)
 {
     const settings::worldspawn_keys &cfg = light_options;
     const float surflight_gate = light_options.emissivequality.value() == emissivequality_t::HIGH ? 0 : 0.01f;
@@ -2362,7 +2362,7 @@ PointSurf_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, rayst
 
                     float atten = qv::dot(rayDir, surfnrm);
 
-                    result += indirect * fmaxf(atten, 0.0f);
+                    result.add(indirect * fmaxf(atten, 0.0f), vpl_settings.style);
                 }
             }
         }
@@ -3243,7 +3243,7 @@ sh_probe_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point)
     return result;
 }
 
-qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal)
+lightgrid_samples_t CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal)
 {
     // TODO: use more than 1 ray for better performance
     raystream_occlusion_t rs(1);
@@ -3253,7 +3253,7 @@ qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qve
 
     auto &cfg = light_options;
 
-    qvec3f result{};
+    lightgrid_samples_t result { };
 
     // from DirectLightFace
 
@@ -3276,7 +3276,10 @@ qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qve
             qvec3f dir = qv::normalize(world_point - entity.get()->origin.value()) * -1.0f;
             float atten = qv::dot(dir, world_normal);
 
-            result += sample.samples_by_style[0].color * fmaxf(atten, 0.0f);
+            for (int i = 0; i < sample.used_styles(); i++)
+            {
+                result.add(sample.samples_by_style[i].color * fmaxf(atten, 0.0f), sample.samples_by_style[i].style);
+            }
         }
     }
 
@@ -3288,7 +3291,10 @@ qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qve
             qvec3f dir = qv::normalize(sun.sunvec);
             float atten = qv::dot(dir, world_normal);
 
-            result += sample.samples_by_style[0].color * fmaxf(atten, 0.0f);
+            for (int i = 0; i < sample.used_styles(); i++)
+            {
+                result.add(sample.samples_by_style[i].color * fmaxf(atten, 0.0f), sample.samples_by_style[i].style);
+            }
         }
     }
 

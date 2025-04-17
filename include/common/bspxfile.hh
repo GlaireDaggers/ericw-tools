@@ -208,6 +208,8 @@ struct bspx_sprop_vertex
     qvec4f tangent;
     qvec2f texcoord;
     uint8_t color[4];
+    std::array<uint8_t[3], 4> light_colors;
+    std::array<uint8_t, 4> light_styles;
 };
 
 struct bspx_sprop_vertices

@@ -1047,9 +1047,20 @@ static void LightProps(const mbsp_t *bsp, bspdata_t *bspdata)
             auto &vtx = sprop_vertices_lump.vertices[prop.first_vertex + vertex_idx];
             auto vtx_col = CalcLightAtPointSurface(bsp, vtx.position + (vtx.normal * 1.0f), vtx.normal);
 
-            vtx.color[0] = (uint8_t)clampf(vtx_col[0], 0.0f, 255.0f);
-            vtx.color[1] = (uint8_t)clampf(vtx_col[1], 0.0f, 255.0f);
-            vtx.color[2] = (uint8_t)clampf(vtx_col[2], 0.0f, 255.0f);
+            for (int i = 0; i < 4; i++)
+            {
+                if (vtx_col.samples_by_style[i].used)
+                {
+                    vtx.light_colors[i][0] = (uint8_t)clampf(vtx_col.samples_by_style[i].color[0], 0.0f, 255.0f);
+                    vtx.light_colors[i][1] = (uint8_t)clampf(vtx_col.samples_by_style[i].color[1], 0.0f, 255.0f);
+                    vtx.light_colors[i][2] = (uint8_t)clampf(vtx_col.samples_by_style[i].color[2], 0.0f, 255.0f);
+                    vtx.light_styles[i] = vtx_col.samples_by_style[i].style;
+                }
+                else
+                {
+                    vtx.light_styles[i] = 255;
+                }
+            }
         });
     }
 

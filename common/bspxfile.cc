@@ -348,6 +348,18 @@ void bspx_sprop_vertices::stream_write(std::ostream &s) const
         s <= vertex.color[1];
         s <= vertex.color[2];
         s <= vertex.color[3];
+
+        for (int i = 0; i < 4; i++) {
+            s <= vertex.light_styles[i];
+        }
+
+        for (int i = 0; i < 4; i++) {
+            if (vertex.light_styles[i] != 255) {
+                s <= vertex.light_colors[i][0];
+                s <= vertex.light_colors[i][1];
+                s <= vertex.light_colors[i][2];
+            }
+        }
     }
 }
 
@@ -368,6 +380,23 @@ void bspx_sprop_vertices::stream_read(std::istream &s)
         s >= vertex.color[1];
         s >= vertex.color[2];
         s >= vertex.color[3];
+
+        for (int i = 0; i < 4; i++) {
+            s >= vertex.light_styles[i];
+        }
+
+        for (int i = 0; i < 4; i++) {
+            if (vertex.light_styles[i] != 255) {
+                s >= vertex.light_colors[i][0];
+                s >= vertex.light_colors[i][1];
+                s >= vertex.light_colors[i][2];
+            }
+            else {
+                vertex.light_colors[i][0] = 0;
+                vertex.light_colors[i][1] = 0;
+                vertex.light_colors[i][2] = 0;
+            }
+        }
 
         vertices.push_back(vertex);
     }

@@ -102,5 +102,5 @@ struct lightgrid_samples_t
 
 lightgrid_samples_t CalcLightgridAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
 sh_probe_t CalcSHAtPoint(const mbsp_t *bsp, const qvec3f &world_point);
-qvec3f CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal);
+lightgrid_samples_t CalcLightAtPointSurface(const mbsp_t *bsp, const qvec3f &world_point, qvec3f &world_normal);
 void ResetLtFace();
